@@ -1,0 +1,32 @@
+# Version control
+.git
+.gitignore
+
+# Dependencies
+node_modules
+npm-debug.log
+
+# Environment
+.env
+.env.*
+
+# Development
+.vscode
+*.log
+.DS_Store
+
+# Build outputs
+dist
+build
+
+# Testing
+coverage
+*.test.js
+
+# Project specific
+README.md
+Dockerfile
+.dockerignore
+
+# Supabase
+supabase/
