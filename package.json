@@ -1,0 +1,21 @@
+{
+  "name": "travel-monitor-bot",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.39.7",
+    "node-telegram-bot-api": "^0.64.0",
+    "node-html-parser": "^6.1.12",
+    "node-schedule": "^2.1.1",
+    "node-fetch": "^3.3.2",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0"
+  }
+}
