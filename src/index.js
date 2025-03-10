@@ -1,6 +1,6 @@
 import TelegramBot from 'node-telegram-bot-api';
 import { parse } from 'node-html-parser';
-import schedule from 'node-schedule';
+import { Cron } from 'croner';
 import fetch from 'node-fetch';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
@@ -98,6 +98,7 @@ function parseTitleAndParticipants(title, participants) {
 
     const numbers = participantsData || titleData.numbers
     if (!numbers) {
+        console.error(`No participant numbers found for title: "${title}"`);
         return null
     }
     const [current_participants, min_participants, max_participants] = numbers.split("/").map(Number);
@@ -111,13 +112,18 @@ function parseTitleAndParticipants(title, participants) {
 }
 
 async function parseVKPage() {
+  console.log('Starting VK page parsing...');
   try {
     const response = await fetch(VK_PAGE_URL);
     const html = await response.text();
+    console.log('Successfully fetched VK page');
+
     const root = parse(html);
     const tripList = root.querySelectorAll('cite')
     let currentMonth = ''
     const trips = []
+
+    console.log('Parsing trips from HTML...');
     for (const tripMonth of tripList) {
       if (tripMonth.querySelector('a') != null) {
 
@@ -134,16 +140,6 @@ async function parseVKPage() {
           if (!parsedTitle && trip.nextSibling != null && trip.nextSibling.text) {
              parsedTitle = parseTitleAndParticipants(trip.text + trip.nextSibling.text, "")
           }
-          //console.log(parsedTitle)
-          // if (trip.text.includes("Алтай")) {
-          //   console.log(trip.text)
-          //   console.log(participants)
-          //   let res = parseTitleAndParticipants(trip.text, participants)
-          //   if (!res && trip.nextSibling != null && trip.nextSibling.text) {
-          //     res = parseTitleAndParticipants(trip.text + trip.nextSibling.text, "")
-          //   }
-          //   console.log(res)
-          // }
 
           if (!parsedTitle) {
             continue
@@ -170,6 +166,7 @@ async function parseVKPage() {
       }
     }
 
+    console.log(`Parsed ${trips.length} trips successfully`);
     return trips;
   } catch (error) {
     console.error('Error parsing VK page:', error);
@@ -178,6 +175,7 @@ async function parseVKPage() {
 }
 
 async function removePastTrips() {
+  console.log('Starting removal of past trips...');
   const currentMonthNum = getCurrentMonthNumber();
   
   // Get all trips
@@ -185,27 +183,42 @@ async function removePastTrips() {
     .from('trips')
     .select('id, month, title');
 
-  if (!trips) return;
+  if (!trips) {
+    console.log('No trips found to remove');
+    return;
+  }
 
   // Filter trips from past months
   const pastTrips = trips.filter(trip => trip.month < currentMonthNum);
+  console.log(`Found ${pastTrips.length} past trips to remove`);
 
   // Remove past trips
   for (const trip of pastTrips) {
+    console.log(`Removing trip: ${trip.title} (Month: ${trip.month})`);
     // Delete the trip (this will cascade delete subscriptions due to foreign key constraint)
     await supabase
       .from('trips')
       .delete()
       .eq('id', trip.id);
   }
+  console.log('Past trips removal completed');
 }
 
 async function updateTripsData() {
+  console.log('Starting trips data update at:', new Date().toISOString());
   // First, remove past trips
   await removePastTrips();
 
   const trips = await parseVKPage();
-  if (!trips) return;
+  if (!trips) {
+    console.error('Failed to parse trips data');
+    return;
+  }
+  console.log('ok')
+
+  console.log(`Processing ${trips.length} trips...`);
+  let updatedCount = 0;
+  let newCount = 0;
 
   for (const trip of trips) {
     const { data: existingTrip } = await supabase
@@ -216,6 +229,9 @@ async function updateTripsData() {
 
     if (existingTrip) {
       if (existingTrip.current_participants !== trip.current_participants) {
+        console.log(`Updating participants for trip: ${trip.title}`);
+        console.log(`Old: ${existingTrip.current_participants}, New: ${trip.current_participants}`);
+
         await supabase
           .from('trips')
           .update({
@@ -236,22 +252,30 @@ async function updateTripsData() {
           .select('chat_id')
           .eq('trip_id', existingTrip.id);
 
+        console.log(`Notifying ${subscriptions?.length || 0} subscribers about the update`);
+
         for (const sub of subscriptions) {
           await bot.sendMessage(
             sub.chat_id,
             `Update for "${trip.title}": Number of participants changed to ${trip.current_participants}/${trip.min_participants}/${trip.max_participants}`
           );
         }
+        updatedCount++;
       }
     } else {
       await supabase
         .from('trips')
         .insert([trip]);
+      newCount++;
     }
   }
+
+  console.log(`Update completed at ${new Date().toISOString()}`);
+  console.log(`Summary: ${newCount} new trips added, ${updatedCount} trips updated`);
 }
 
 async function sendTripsList(chatId, page = 1, messageId = null) {
+  console.log(`Sending trips list to chat ${chatId} (page ${page})`);
   const { data: trips } = await supabase
     .from('trips')
     .select()
@@ -309,6 +333,7 @@ async function sendTripsList(chatId, page = 1, messageId = null) {
 }
 
 async function sendSubscriptionsList(chatId, page = 1, messageId = null) {
+  console.log(`Sending subscriptions list to chat ${chatId} (page ${page})`);
   const { data: subscriptions } = await supabase
     .from('subscriptions')
     .select(`
@@ -519,8 +544,12 @@ bot.onText(/\/unsubscribe (.+)/, async (msg, match) => {
   );
 });
 
-// Schedule hourly updates
-schedule.scheduleJob('* 1 * * *', updateTripsData);
+// Schedule updates every hour using Croner
+const updateJob = new Cron('0 * * * *', { timezone: "Europe/Moscow" }, () => {
+ updateTripsData().catch(error => {
+   console.error('Error in scheduled update:', error);
+ });
+});
 
 // Initial update
 updateTripsData();
